@@ -47,9 +47,15 @@ public:
                 const std::string& context = "");
 
     std::expected<std::string, std::string>
+    create_nodes(const json& nodes_array);
+
+    std::expected<std::string, std::string>
     add_dependency(const std::string& node_id,
                    const std::string& depends_on,
                    const std::string& rationale);
+
+    std::expected<std::string, std::string>
+    add_dependencies(const json& deps_array);
 
     // --- Working ---
 
@@ -60,6 +66,11 @@ public:
 
     std::expected<std::string, std::string>
     done(const std::string& id, const std::string& summary);
+
+    std::expected<std::string, std::string>
+    done_batch(const json& items_array);
+
+    std::string next_batch(int n);
 
     std::expected<std::string, std::string>
     delete_node(const std::string& id, const std::string& reason);

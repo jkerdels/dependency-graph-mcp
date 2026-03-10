@@ -252,6 +252,36 @@ DependencyGraph::create_node(const std::string& id,
 }
 
 std::expected<std::string, std::string>
+DependencyGraph::create_nodes(const json& nodes_array) {
+    std::ostringstream ss;
+    int created = 0;
+    int errors = 0;
+
+    for (const auto& item : nodes_array) {
+        std::string id = item.at("id");
+        std::string task = item.at("task");
+        int priority = item.value("priority", 0);
+        std::string context = item.value("context", "");
+
+        auto result = create_node(id, task, priority, context);
+        if (result) {
+            created++;
+        } else {
+            errors++;
+            ss << "Error: " << result.error() << "\n";
+        }
+    }
+
+    ss << "Created " << created << " node(s)";
+    if (errors > 0) ss << ", " << errors << " error(s)";
+    ss << ".";
+
+    if (created == 0 && errors > 0)
+        return std::unexpected(ss.str());
+    return ss.str();
+}
+
+std::expected<std::string, std::string>
 DependencyGraph::add_dependency(const std::string& node_id,
                                 const std::string& depends_on,
                                 const std::string& rationale) {
@@ -285,6 +315,35 @@ DependencyGraph::add_dependency(const std::string& node_id,
 
     auto_save_if_enabled();
     return "'" + node_id + "' now depends on '" + depends_on + "'";
+}
+
+std::expected<std::string, std::string>
+DependencyGraph::add_dependencies(const json& deps_array) {
+    std::ostringstream ss;
+    int added = 0;
+    int errors = 0;
+
+    for (const auto& item : deps_array) {
+        std::string node_id = item.at("node_id");
+        std::string depends_on = item.at("depends_on");
+        std::string rationale = item.value("rationale", "");
+
+        auto result = add_dependency(node_id, depends_on, rationale);
+        if (result) {
+            added++;
+        } else {
+            errors++;
+            ss << "Error: " << result.error() << "\n";
+        }
+    }
+
+    ss << "Added " << added << " dependency/ies";
+    if (errors > 0) ss << ", " << errors << " error(s)";
+    ss << ".";
+
+    if (added == 0 && errors > 0)
+        return std::unexpected(ss.str());
+    return ss.str();
 }
 
 // ============================================================================
@@ -404,6 +463,83 @@ DependencyGraph::done(const std::string& id, const std::string& summary) {
 }
 
 std::expected<std::string, std::string>
+DependencyGraph::done_batch(const json& items_array) {
+    std::ostringstream ss;
+    int completed = 0;
+    int errors = 0;
+
+    for (const auto& item : items_array) {
+        std::string id = item.at("id");
+        std::string summary = item.at("summary");
+
+        auto result = done(id, summary);
+        if (result) {
+            completed++;
+        } else {
+            errors++;
+            ss << "Error: " << result.error() << "\n";
+        }
+    }
+
+    ss << "Completed " << completed << " node(s)";
+    if (errors > 0) ss << ", " << errors << " error(s)";
+    ss << ".";
+
+    if (completed == 0 && errors > 0)
+        return std::unexpected(ss.str());
+    return ss.str();
+}
+
+std::string DependencyGraph::next_batch(int n) {
+    recompute_priorities();
+
+    // Collect all actionable nodes
+    std::vector<const Node*> actionable;
+    for (const auto& [id, node] : nodes_) {
+        if (is_actionable(node)) {
+            actionable.push_back(&node);
+        }
+    }
+
+    if (actionable.empty()) {
+        bool any_pending = false;
+        for (const auto& [id, node] : nodes_) {
+            if (node.state == State::pending || node.state == State::invalidated
+                || node.state == State::in_progress) {
+                any_pending = true;
+                break;
+            }
+        }
+        if (!any_pending) return "All tasks are done.";
+        return "No actionable tasks. Remaining tasks are blocked by unfinished dependencies.";
+    }
+
+    // Sort by effective_priority desc, then priority desc
+    std::sort(actionable.begin(), actionable.end(),
+        [](const Node* a, const Node* b) {
+            if (a->effective_priority != b->effective_priority)
+                return a->effective_priority > b->effective_priority;
+            return a->priority > b->priority;
+        });
+
+    // Limit to n
+    if (n > 0 && static_cast<int>(actionable.size()) > n) {
+        actionable.resize(n);
+    }
+
+    std::ostringstream ss;
+    ss << "Actionable tasks (" << actionable.size() << "):\n";
+    ss << "  ID | Task | ep\n";
+    ss << "  ---|------|---\n";
+    for (const auto* node : actionable) {
+        ss << "  " << node->id << " | " << node->task
+           << " | " << node->effective_priority << "\n";
+    }
+    ss << "\nUse dag_start to begin working on a task.";
+    return ss.str();
+}
+
+std::expected<std::string, std::string>
 DependencyGraph::delete_node(const std::string& id, const std::string& reason) {
     auto it = nodes_.find(id);
     if (it == nodes_.end())
@@ -467,7 +603,22 @@ std::string DependencyGraph::status() {
 
     if (grouped.empty()) return "No nodes in graph.";
 
+    // Count totals for progress line
+    int total_nodes = 0;
+    int done_nodes = 0;
+    for (const auto& [id, node] : nodes_) {
+        if (node.state != State::deleted) {
+            total_nodes++;
+            if (node.state == State::done) done_nodes++;
+        }
+    }
+
     std::ostringstream ss;
+
+    // Progress summary
+    int pct = total_nodes > 0 ? (done_nodes * 100 / total_nodes) : 0;
+    ss << "Progress: " << done_nodes << "/" << total_nodes
+       << " done (" << pct << "%)\n\n";
 
     auto print_group = [&](State state, const std::string& header) {
         auto it = grouped.find(state);
@@ -486,8 +637,7 @@ std::string DependencyGraph::status() {
                     deps_met++;
             }
             ss << "  - " << node->id << ": " << node->task;
-            ss << " [p:" << node->priority
-               << " ep:" << node->effective_priority << "]";
+            ss << " [ep:" << node->effective_priority << "]";
             if (deps_total > 0)
                 ss << " (deps: " << deps_met << "/" << deps_total << ")";
             ss << "\n";
@@ -634,15 +784,20 @@ and helps you pick the right next task.
 ### 1. Plan: create nodes and wire dependencies
   - dag_create_node: define each task with an id, description, priority, and
     optional context (the reasoning/background behind the task).
+  - dag_create_nodes: batch-create multiple nodes from a JSON array.
   - dag_add_dependency: declare that node A depends on node B. Cycles are
     rejected automatically.
+  - dag_add_dependencies: batch-wire multiple dependencies from a JSON array.
 
 ### 2. Execute: work through the graph
   - dag_next: ask the graph for the highest-priority actionable task (all
     dependencies met). The node is automatically marked in_progress.
+  - dag_next_batch: list multiple actionable tasks ranked by priority,
+    without auto-starting them. Use dag_start to begin working on chosen tasks.
   - dag_start: manually start a specific node. Also used to **reopen** a
     done node — dependents are cascade-invalidated so they can be re-verified.
   - dag_done: mark a task as complete with a summary of what was accomplished.
+  - dag_done_batch: mark multiple in_progress tasks as done at once.
 
 ### 3. Observe: understand the current state
   - dag_status: grouped overview (in_progress, pending, done, invalidated).

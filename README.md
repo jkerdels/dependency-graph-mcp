@@ -17,14 +17,18 @@ This server gives AI assistants (or any MCP client) a structured way to plan and
 | Tool | Description |
 |------|-------------|
 | `dag_create_node` | Create a task node with id, description, priority, and optional context |
+| `dag_create_nodes` | Batch-create multiple nodes from a JSON array |
 | `dag_add_dependency` | Add a dependency between existing nodes |
+| `dag_add_dependencies` | Batch-add multiple dependencies from a JSON array |
 | `dag_next` | Get the next actionable task (priority-aware DFS), auto-marks as in_progress |
+| `dag_next_batch` | List up to n actionable tasks ranked by priority (does not auto-start) |
 | `dag_start` | Manually start a specific node, or reopen a completed one (cascades invalidation) |
 | `dag_done` | Mark a task as completed |
+| `dag_done_batch` | Mark multiple in_progress tasks as done at once |
 | `dag_delete_node` | Soft-delete a node (preserves data, supports undo) |
 | `dag_undelete` | Restore a deleted node |
 | `dag_log` | Append a note to a node's changelog |
-| `dag_status` | Overview of all nodes grouped by state |
+| `dag_status` | Overview of all nodes grouped by state, with progress percentage |
 | `dag_show` | Display the graph structure (text or JSON) |
 | `dag_save` | Save graph to JSON file (with optional auto-save) |
 | `dag_load` | Load graph from JSON file |

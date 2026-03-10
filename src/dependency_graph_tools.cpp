@@ -24,6 +24,26 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         }
     );
 
+    // --- create_nodes (batch) ---
+
+    using CreateNodesParams = std::tuple<
+        ToolParam<"nodes", "JSON array of objects with fields: id (string), task (string), priority (int, optional), context (string, optional)", std::string>
+    >;
+
+    server.tools().register_tool<CreateNodesParams>(
+        "dag_create_nodes",
+        "Batch-create multiple nodes at once. Pass a JSON array of node objects. "
+        "Each object must have 'id' and 'task', optionally 'priority' and 'context'.",
+        [&graph](CreateNodesParams& p) -> std::string {
+            std::string input = std::get<0>(p);
+            auto j = json::parse(input, nullptr, false);
+            if (j.is_discarded() || !j.is_array())
+                return "Error: parameter must be a valid JSON array.";
+            auto result = graph.create_nodes(j);
+            return result ? *result : result.error();
+        }
+    );
+
     // --- add_dependency ---
 
     using AddDepParams = std::tuple<
@@ -39,6 +59,26 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         [&graph](AddDepParams& p) -> std::string {
             auto result = graph.add_dependency(
                 std::get<0>(p), std::get<1>(p), std::get<2>(p));
+            return result ? *result : result.error();
+        }
+    );
+
+    // --- add_dependencies (batch) ---
+
+    using AddDepsParams = std::tuple<
+        ToolParam<"dependencies", "JSON array of objects with fields: node_id (string), depends_on (string), rationale (string, optional)", std::string>
+    >;
+
+    server.tools().register_tool<AddDepsParams>(
+        "dag_add_dependencies",
+        "Batch-add multiple dependencies at once. Pass a JSON array of dependency objects. "
+        "Each object must have 'node_id' and 'depends_on', optionally 'rationale'.",
+        [&graph](AddDepsParams& p) -> std::string {
+            std::string input = std::get<0>(p);
+            auto j = json::parse(input, nullptr, false);
+            if (j.is_discarded() || !j.is_array())
+                return "Error: parameter must be a valid JSON array.";
+            auto result = graph.add_dependencies(j);
             return result ? *result : result.error();
         }
     );
@@ -87,6 +127,41 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         [&graph](DoneParams& p) -> std::string {
             auto result = graph.done(std::get<0>(p), std::get<1>(p));
             return result ? *result : result.error();
+        }
+    );
+
+    // --- done_batch ---
+
+    using DoneBatchParams = std::tuple<
+        ToolParam<"items", "JSON array of objects with fields: id (string), summary (string)", std::string>
+    >;
+
+    server.tools().register_tool<DoneBatchParams>(
+        "dag_done_batch",
+        "Mark multiple in_progress tasks as done at once. "
+        "Pass a JSON array of objects with 'id' and 'summary'.",
+        [&graph](DoneBatchParams& p) -> std::string {
+            std::string input = std::get<0>(p);
+            auto j = json::parse(input, nullptr, false);
+            if (j.is_discarded() || !j.is_array())
+                return "Error: parameter must be a valid JSON array.";
+            auto result = graph.done_batch(j);
+            return result ? *result : result.error();
+        }
+    );
+
+    // --- next_batch ---
+
+    using NextBatchParams = std::tuple<
+        ToolParam<"n", "Maximum number of actionable tasks to return (0 = all)", int>
+    >;
+
+    server.tools().register_tool<NextBatchParams>(
+        "dag_next_batch",
+        "List up to n actionable tasks ranked by effective priority. "
+        "Does NOT change node state — use dag_start to begin working on a task.",
+        [&graph](NextBatchParams& p) -> std::string {
+            return graph.next_batch(std::get<0>(p));
         }
     );
 
