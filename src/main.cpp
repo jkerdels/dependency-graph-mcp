@@ -1,25 +1,20 @@
 #include <iostream>
 #include <string>
 #include <csignal>
-#include <atomic>
 #include <tiny-mcp/mcp_server.h>
 #include "dependency_graph.h"
 
 void register_dependency_graph(DependencyGraph&, McpToolServer&);
 
-static std::atomic<bool> shutdown_requested{false};
+static volatile std::sig_atomic_t shutdown_requested = 0;
 
 static void signal_handler(int) {
-    shutdown_requested.store(true, std::memory_order_relaxed);
+    shutdown_requested = 1;
 }
 
 int main() {
-    std::ios_base::sync_with_stdio(false);
-
-    // Handle termination signals gracefully so we exit 0 instead of 128+sig
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGINT, signal_handler);
-    // Ignore SIGPIPE so writing to closed pipes doesn't kill us
     std::signal(SIGPIPE, SIG_IGN);
 
     McpToolServer server("dependency-graph-mcp", "0.1.0");
@@ -31,7 +26,9 @@ int main() {
 
     json message;
     try {
-        while (!shutdown_requested.load(std::memory_order_relaxed) && std::cin >> message) {
+        while (!shutdown_requested && std::cin >> message) {
+            if (shutdown_requested) break;
+
             std::cerr << "[mcp] recv: " << message << std::endl;
 
             auto response = server.handle_message(message);
@@ -44,11 +41,6 @@ int main() {
         }
     } catch (const json::parse_error&) {
         // nlohmann::json throws parse_error on EOF instead of setting eofbit
-    }
-
-    if (std::cin.bad()) {
-        std::cerr << "[mcp] stdin read error." << std::endl;
-        return 1;
     }
 
     std::cerr << "[mcp] shutting down." << std::endl;
