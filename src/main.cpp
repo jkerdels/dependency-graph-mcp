@@ -16,16 +16,20 @@ int main() {
     std::cerr << "[mcp] server started, waiting for messages on stdin..." << std::endl;
 
     json message;
-    while (std::cin >> message) {
-        std::cerr << "[mcp] recv: " << message << std::endl;
+    try {
+        while (std::cin >> message) {
+            std::cerr << "[mcp] recv: " << message << std::endl;
 
-        auto response = server.handle_message(message);
+            auto response = server.handle_message(message);
 
-        if (response) {
-            std::cerr << "[mcp] send: " << *response << std::endl;
-            std::cout << *response << "\n";
-            std::cout.flush();
+            if (response) {
+                std::cerr << "[mcp] send: " << *response << std::endl;
+                std::cout << *response << "\n";
+                std::cout.flush();
+            }
         }
+    } catch (const json::parse_error&) {
+        // nlohmann::json throws parse_error on EOF instead of setting eofbit
     }
 
     if (std::cin.bad()) {
