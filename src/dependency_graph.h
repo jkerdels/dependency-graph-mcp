@@ -29,6 +29,7 @@ public:
     struct Node {
         std::string id;
         std::string task;
+        std::string context;  // reasoning / background behind the task
         State       state = State::pending;
         int         priority = 0;
         int         effective_priority = 0;
@@ -43,8 +44,7 @@ public:
     create_node(const std::string& id,
                 const std::string& task,
                 int priority = 0,
-                const std::string& parent_id = "",
-                const std::string& rationale = "");
+                const std::string& context = "");
 
     std::expected<std::string, std::string>
     add_dependency(const std::string& node_id,
@@ -54,6 +54,9 @@ public:
     // --- Working ---
 
     std::expected<std::string, std::string> next();
+
+    std::expected<std::string, std::string>
+    start(const std::string& id);
 
     std::expected<std::string, std::string>
     done(const std::string& id, const std::string& summary);
@@ -72,6 +75,8 @@ public:
     std::string status();
 
     std::string show(const std::string& id = "", const std::string& format = "text");
+
+    static std::string usage_guide();
 
     // --- Persistence ---
 

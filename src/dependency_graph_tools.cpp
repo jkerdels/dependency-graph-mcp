@@ -6,21 +6,20 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
     // --- create_node ---
 
     using CreateParams = std::tuple<
-        ToolParam<"id",        "Unique identifier for the node",          std::string>,
-        ToolParam<"task",      "Description of what needs to be done",    std::string>,
-        ToolParam<"priority",  "Priority (higher = more urgent, default 0)", int>,
-        ToolParam<"parent_id", "Parent node that will depend on this node (optional, empty string if none)", std::string>,
-        ToolParam<"rationale", "Why the parent depends on this node (optional)", std::string>
+        ToolParam<"id",       "Unique identifier for the node",              std::string>,
+        ToolParam<"task",     "Description of what needs to be done",        std::string>,
+        ToolParam<"priority", "Priority (higher = more urgent, default 0)",  int>,
+        ToolParam<"context",  "Reasoning or background behind this task (optional, empty string if none)", std::string>
     >;
 
     server.tools().register_tool<CreateParams>(
         "dag_create_node",
-        "Create a new node in the dependency graph. Optionally attach it as a "
-        "dependency of an existing parent node.",
+        "Create a new node in the dependency graph. "
+        "Use dag_add_dependency to wire it to other nodes.",
         [&graph](CreateParams& p) -> std::string {
             auto result = graph.create_node(
                 std::get<0>(p), std::get<1>(p), std::get<2>(p),
-                std::get<3>(p), std::get<4>(p));
+                std::get<3>(p));
             return result ? *result : result.error();
         }
     );
@@ -54,6 +53,23 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "Uses priority-aware DFS. Marks the task as in_progress.",
         [&graph](EmptyParams&) -> std::string {
             auto result = graph.next();
+            return result ? *result : result.error();
+        }
+    );
+
+    // --- start ---
+
+    using StartParams = std::tuple<
+        ToolParam<"id", "The node to start working on", std::string>
+    >;
+
+    server.tools().register_tool<StartParams>(
+        "dag_start",
+        "Manually start a specific node. Transitions pending/invalidated to "
+        "in_progress. Also reopens done nodes (cascades invalidation to dependents). "
+        "Use this to override dag_next's ordering or to reopen completed work.",
+        [&graph](StartParams& p) -> std::string {
+            auto result = graph.start(std::get<0>(p));
             return result ? *result : result.error();
         }
     );
@@ -178,6 +194,17 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         [&graph](LoadParams& p) -> std::string {
             auto result = graph.load(std::get<0>(p));
             return result ? *result : result.error();
+        }
+    );
+
+    // --- usage_guide ---
+
+    server.tools().register_tool<EmptyParams>(
+        "dag_usage_guide",
+        "Returns a comprehensive guide on how to use the dependency graph tools effectively. "
+        "Call this at the start of a session to understand the principles of operation.",
+        [](EmptyParams&) -> std::string {
+            return DependencyGraph::usage_guide();
         }
     );
 }

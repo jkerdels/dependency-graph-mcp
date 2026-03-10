@@ -168,16 +168,20 @@ void DependencyGraph::recompute_priorities() {
     }
 
     // Bottom-up: leaves are processed first, so when we reach a node,
-    // all its dependencies already have their effective_priority computed
+    // all its dependencies already have their effective_priority computed.
+    // Only unfinished (pending/in_progress/invalidated) deps contribute to ep,
+    // so ep reflects "priority of my current bottleneck", not historical max.
     for (const auto& id : topo_order) {
         auto& node = nodes_[id];
         node.effective_priority = node.priority;
         for (const auto& dep : node.dependencies) {
             auto it = nodes_.find(dep.node_id);
-            if (it != nodes_.end()) {
-                node.effective_priority = std::max(
-                    node.effective_priority, it->second.effective_priority);
-            }
+            if (it == nodes_.end()) continue;
+            // Skip done/deleted deps — they're no longer blocking
+            if (it->second.state == State::done || it->second.state == State::deleted)
+                continue;
+            node.effective_priority = std::max(
+                node.effective_priority, it->second.effective_priority);
         }
     }
 
@@ -226,19 +230,15 @@ std::expected<std::string, std::string>
 DependencyGraph::create_node(const std::string& id,
                              const std::string& task,
                              int priority,
-                             const std::string& parent_id,
-                             const std::string& rationale) {
+                             const std::string& context) {
     if (nodes_.count(id)) {
         return std::unexpected("Node '" + id + "' already exists.");
-    }
-
-    if (!parent_id.empty() && !nodes_.count(parent_id)) {
-        return std::unexpected("Parent node '" + parent_id + "' not found.");
     }
 
     Node node;
     node.id = id;
     node.task = task;
+    node.context = context;
     node.priority = priority;
     node.effective_priority = priority;
     append_changelog(node, "Node created");
@@ -246,24 +246,9 @@ DependencyGraph::create_node(const std::string& id,
     nodes_[id] = std::move(node);
     priorities_dirty_ = true;
 
-    // If parent specified, add dependency: parent depends on this new node
-    if (!parent_id.empty()) {
-        auto& parent = nodes_[parent_id];
-        parent.dependencies.push_back({id, rationale});
-        append_changelog(parent, "Added dependency on '" + id + "'");
-
-        // May need to invalidate parent and its dependents
-        if (parent.state == State::done || parent.state == State::in_progress) {
-            cascade_invalidate(parent_id,
-                "New dependency '" + id + "' added");
-        }
-    }
-
     auto_save_if_enabled();
 
-    std::string msg = "Created node '" + id + "'";
-    if (!parent_id.empty()) msg += " as dependency of '" + parent_id + "'";
-    return msg;
+    return "Created node '" + id + "'";
 }
 
 std::expected<std::string, std::string>
@@ -336,6 +321,7 @@ std::expected<std::string, std::string> DependencyGraph::next() {
             auto& node = nodes_[*result];
             node.state = State::in_progress;
             append_changelog(node, "Started (via next)");
+            priorities_dirty_ = true;  // ep depends on dep state
             auto_save_if_enabled();
 
             std::string msg = "Next task: '" + *result + "'\n";
@@ -366,6 +352,39 @@ std::expected<std::string, std::string> DependencyGraph::next() {
 }
 
 std::expected<std::string, std::string>
+DependencyGraph::start(const std::string& id) {
+    auto it = nodes_.find(id);
+    if (it == nodes_.end())
+        return std::unexpected("Node '" + id + "' not found.");
+
+    auto& node = it->second;
+
+    if (node.state == State::in_progress)
+        return std::unexpected("Node '" + id + "' is already in_progress.");
+    if (node.state == State::deleted)
+        return std::unexpected("Node '" + id + "' is deleted. Undelete it first.");
+
+    // Allow starting from pending, invalidated, or done (reopen)
+    std::string prev_state = state_to_string(node.state);
+    node.state = State::in_progress;
+
+    if (prev_state == "done") {
+        append_changelog(node, "Reopened and started (was done)");
+        // Cascade invalidation: dependents of this node are now invalid
+        for (const auto& dep_id : dependents_of(id)) {
+            cascade_invalidate(dep_id,
+                "Dependency '" + id + "' was reopened");
+        }
+    } else {
+        append_changelog(node, "Started manually (was " + prev_state + ")");
+    }
+
+    priorities_dirty_ = true;
+    auto_save_if_enabled();
+    return "Started '" + id + "' (was " + prev_state + ").";
+}
+
+std::expected<std::string, std::string>
 DependencyGraph::done(const std::string& id, const std::string& summary) {
     auto it = nodes_.find(id);
     if (it == nodes_.end())
@@ -378,6 +397,7 @@ DependencyGraph::done(const std::string& id, const std::string& summary) {
 
     node.state = State::done;
     append_changelog(node, "Done: " + summary);
+    priorities_dirty_ = true;  // ep depends on dep state
     auto_save_if_enabled();
 
     return "Marked '" + id + "' as done.";
@@ -544,6 +564,9 @@ std::string DependencyGraph::format_text(
                << node->id << ": " << node->task
                << " [p:" << node->priority
                << " ep:" << node->effective_priority << "]\n";
+            if (!node->context.empty()) {
+                ss << indent << "  context: " << node->context << "\n";
+            }
 
             if (printed.count(nid)) {
                 if (!node->dependencies.empty()) {
@@ -583,6 +606,7 @@ std::string DependencyGraph::format_json(
         }
         result[id] = {
             {"task", node->task},
+            {"context", node->context},
             {"state", state_to_string(node->state)},
             {"priority", node->priority},
             {"effective_priority", node->effective_priority},
@@ -591,6 +615,73 @@ std::string DependencyGraph::format_json(
         };
     }
     return result.dump(2);
+}
+
+// ============================================================================
+// USAGE GUIDE
+// ============================================================================
+
+std::string DependencyGraph::usage_guide() {
+    return R"(# Dependency Graph — Usage Guide
+
+## Purpose
+Manage complex, multi-step tasks by breaking them into nodes with explicit
+dependency relationships. The graph enforces ordering, tracks progress,
+and helps you pick the right next task.
+
+## Core Workflow
+
+### 1. Plan: create nodes and wire dependencies
+  - dag_create_node: define each task with an id, description, priority, and
+    optional context (the reasoning/background behind the task).
+  - dag_add_dependency: declare that node A depends on node B. Cycles are
+    rejected automatically.
+
+### 2. Execute: work through the graph
+  - dag_next: ask the graph for the highest-priority actionable task (all
+    dependencies met). The node is automatically marked in_progress.
+  - dag_start: manually start a specific node. Also used to **reopen** a
+    done node — dependents are cascade-invalidated so they can be re-verified.
+  - dag_done: mark a task as complete with a summary of what was accomplished.
+
+### 3. Observe: understand the current state
+  - dag_status: grouped overview (in_progress, pending, done, invalidated).
+  - dag_show: tree visualization of the full graph or a sub-DAG.
+  - dag_log: append notes to a node's changelog without changing its state.
+
+### 4. Adapt: handle changes mid-flight
+  - Adding a dependency to a done/in_progress node **cascades invalidation**
+    upward — the node and its dependents become invalidated and must be
+    reworked.
+  - dag_start on a done node reopens it (same cascade effect).
+  - dag_delete_node: soft-delete a node (treated as "met" by dependents).
+  - dag_undelete: restore a deleted node to its previous state.
+
+## Key Concepts
+
+- **Priority (p)**: user-assigned importance. Higher = more urgent.
+- **Effective priority (ep)**: the maximum priority among the node itself
+  and its *unfinished* transitive dependencies. Reflects "how hot is my
+  current bottleneck". Once a dependency is done, it stops contributing
+  to ep.
+- **Actionable**: a node is actionable when it is pending (or invalidated)
+  and ALL its dependencies are either done or deleted.
+- **Invalidation cascade**: when a completed node gains a new dependency
+  or is reopened, it and all its transitive dependents are marked
+  invalidated, signaling they need re-verification.
+
+## Recommended Patterns
+
+- Create all nodes first, then wire dependencies. This keeps the graph
+  construction phase clean and parallel-safe.
+- Use dag_next for "autopilot" — let the graph pick the optimal task.
+  Use dag_start when you need to override the order or reopen a task.
+- Use the context field to capture *why* a task exists (design rationale,
+  requirements). Use dag_log for *what happened* during execution
+  (decisions made, issues hit, scope changes).
+- Check dag_status periodically to maintain awareness of overall progress.
+- Use dag_save with auto_save=true early — every mutation is persisted.
+)";
 }
 
 // ============================================================================
@@ -610,6 +701,7 @@ json DependencyGraph::to_json() const {
         }
         nodes[id] = {
             {"task", node.task},
+            {"context", node.context},
             {"state", state_to_string(node.state)},
             {"priority", node.priority},
             {"effective_priority", node.effective_priority},
@@ -629,6 +721,7 @@ void DependencyGraph::from_json(const json& j) {
         Node node;
         node.id = it.key();
         node.task = it.value().at("task");
+        node.context = it.value().value("context", "");
         node.state = string_to_state(it.value().at("state"));
         node.priority = it.value().value("priority", 0);
         node.effective_priority = it.value().value("effective_priority", 0);
