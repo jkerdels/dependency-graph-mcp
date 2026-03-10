@@ -50,17 +50,15 @@ CMake will automatically fetch [tiny-mcp](https://github.com/jkerdels/tiny-mcp) 
 
 ## Usage
 
-Register with Claude Code in your `.mcp.json`:
+Register the server with Claude Code using the CLI:
 
-```json
-{
-  "mcpServers": {
-    "dependency-graph": {
-      "command": "/path/to/dependency-graph-mcp"
-    }
-  }
-}
+```bash
+claude mcp add --scope user --transport stdio dependency-graph -- /path/to/build/dependency-graph-mcp
 ```
+
+This makes the server available across all your projects. Use `--scope project` instead to share it with your team via the project's `.mcp.json`.
+
+You can verify it's registered by typing `/mcp` inside Claude Code.
 
 ## Requirements
 
