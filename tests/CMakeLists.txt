@@ -1,0 +1,3 @@
+add_executable(test_dependency_graph test_dependency_graph.cpp)
+target_link_libraries(test_dependency_graph PRIVATE dep_graph_lib doctest::doctest)
+add_test(NAME test_dependency_graph COMMAND test_dependency_graph)
