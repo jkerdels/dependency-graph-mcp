@@ -16,11 +16,10 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_create_node",
         "Create a new node in the dependency graph. "
         "Use dag_add_dependency to wire it to other nodes.",
-        [&graph](CreateParams& p) -> std::string {
-            auto result = graph.create_node(
+        [&graph](CreateParams& p) -> std::expected<std::string,std::string> {
+            return graph.create_node(
                 std::get<0>(p), std::get<1>(p), std::get<2>(p),
                 std::get<3>(p));
-            return result ? *result : result.error();
         }
     );
 
@@ -34,13 +33,12 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_create_nodes",
         "Batch-create multiple nodes at once. Pass a JSON array of node objects. "
         "Each object must have 'id' and 'task', optionally 'priority' and 'context'.",
-        [&graph](CreateNodesParams& p) -> std::string {
+        [&graph](CreateNodesParams& p) -> std::expected<std::string,std::string> {
             std::string input = std::get<0>(p);
             auto j = json::parse(input, nullptr, false);
             if (j.is_discarded() || !j.is_array())
-                return "Error: parameter must be a valid JSON array.";
-            auto result = graph.create_nodes(j);
-            return result ? *result : result.error();
+                return std::unexpected("parameter must be a valid JSON array.");
+            return graph.create_nodes(j);
         }
     );
 
@@ -56,10 +54,9 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_add_dependency",
         "Add a dependency: node_id will depend on depends_on. "
         "Rejects cycles. May cascade invalidation.",
-        [&graph](AddDepParams& p) -> std::string {
-            auto result = graph.add_dependency(
+        [&graph](AddDepParams& p) -> std::expected<std::string,std::string> {
+            return graph.add_dependency(
                 std::get<0>(p), std::get<1>(p), std::get<2>(p));
-            return result ? *result : result.error();
         }
     );
 
@@ -73,13 +70,12 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_add_dependencies",
         "Batch-add multiple dependencies at once. Pass a JSON array of dependency objects. "
         "Each object must have 'node_id' and 'depends_on', optionally 'rationale'.",
-        [&graph](AddDepsParams& p) -> std::string {
+        [&graph](AddDepsParams& p) -> std::expected<std::string,std::string> {
             std::string input = std::get<0>(p);
             auto j = json::parse(input, nullptr, false);
             if (j.is_discarded() || !j.is_array())
-                return "Error: parameter must be a valid JSON array.";
-            auto result = graph.add_dependencies(j);
-            return result ? *result : result.error();
+                return std::unexpected("parameter must be a valid JSON array.");
+            return graph.add_dependencies(j);
         }
     );
 
@@ -91,9 +87,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_next",
         "Get the next actionable task from the dependency graph. "
         "Uses priority-aware DFS. Marks the task as in_progress.",
-        [&graph](EmptyParams&) -> std::string {
-            auto result = graph.next();
-            return result ? *result : result.error();
+        [&graph](EmptyParams&) -> std::expected<std::string,std::string> {
+            return graph.next();
         }
     );
 
@@ -108,9 +103,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "Manually start a specific node. Transitions pending/invalidated to "
         "in_progress. Also reopens done nodes (cascades invalidation to dependents). "
         "Use this to override dag_next's ordering or to reopen completed work.",
-        [&graph](StartParams& p) -> std::string {
-            auto result = graph.start(std::get<0>(p));
-            return result ? *result : result.error();
+        [&graph](StartParams& p) -> std::expected<std::string,std::string> {
+            return graph.start(std::get<0>(p));
         }
     );
 
@@ -124,9 +118,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
     server.tools().register_tool<DoneParams>(
         "dag_done",
         "Mark a task as done. Must be in_progress.",
-        [&graph](DoneParams& p) -> std::string {
-            auto result = graph.done(std::get<0>(p), std::get<1>(p));
-            return result ? *result : result.error();
+        [&graph](DoneParams& p) -> std::expected<std::string,std::string> {
+            return graph.done(std::get<0>(p), std::get<1>(p));
         }
     );
 
@@ -140,13 +133,12 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_done_batch",
         "Mark multiple in_progress tasks as done at once. "
         "Pass a JSON array of objects with 'id' and 'summary'.",
-        [&graph](DoneBatchParams& p) -> std::string {
+        [&graph](DoneBatchParams& p) -> std::expected<std::string,std::string> {
             std::string input = std::get<0>(p);
             auto j = json::parse(input, nullptr, false);
             if (j.is_discarded() || !j.is_array())
-                return "Error: parameter must be a valid JSON array.";
-            auto result = graph.done_batch(j);
-            return result ? *result : result.error();
+                return std::unexpected("parameter must be a valid JSON array.");
+            return graph.done_batch(j);
         }
     );
 
@@ -160,7 +152,7 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_next_batch",
         "List up to n actionable tasks ranked by effective priority. "
         "Does NOT change node state — use dag_start to begin working on a task.",
-        [&graph](NextBatchParams& p) -> std::string {
+        [&graph](NextBatchParams& p) -> std::expected<std::string,std::string> {
             return graph.next_batch(std::get<0>(p));
         }
     );
@@ -176,9 +168,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_delete_node",
         "Soft-delete a node. Preserves data for reasoning and undo. "
         "Deleted dependencies are treated as met.",
-        [&graph](DeleteParams& p) -> std::string {
-            auto result = graph.delete_node(std::get<0>(p), std::get<1>(p));
-            return result ? *result : result.error();
+        [&graph](DeleteParams& p) -> std::expected<std::string,std::string> {
+            return graph.delete_node(std::get<0>(p), std::get<1>(p));
         }
     );
 
@@ -191,9 +182,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
     server.tools().register_tool<UndeleteParams>(
         "dag_undelete",
         "Restore a deleted node to its pre-deletion state.",
-        [&graph](UndeleteParams& p) -> std::string {
-            auto result = graph.undelete(std::get<0>(p));
-            return result ? *result : result.error();
+        [&graph](UndeleteParams& p) -> std::expected<std::string,std::string> {
+            return graph.undelete(std::get<0>(p));
         }
     );
 
@@ -207,9 +197,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
     server.tools().register_tool<LogParams>(
         "dag_log",
         "Append a changelog entry to a node without changing its state.",
-        [&graph](LogParams& p) -> std::string {
-            auto result = graph.log(std::get<0>(p), std::get<1>(p));
-            return result ? *result : result.error();
+        [&graph](LogParams& p) -> std::expected<std::string,std::string> {
+            return graph.log(std::get<0>(p), std::get<1>(p));
         }
     );
 
@@ -219,7 +208,7 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_status",
         "Overview of all non-deleted nodes grouped by state, "
         "with priority and dependency progress.",
-        [&graph](EmptyParams&) -> std::string {
+        [&graph](EmptyParams&) -> std::expected<std::string,std::string> {
             return graph.status();
         }
     );
@@ -235,7 +224,7 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_show",
         "Show the dependency graph. If id is given, shows the sub-DAG of "
         "all transitive prerequisites. Format: 'text' or 'json'.",
-        [&graph](ShowParams& p) -> std::string {
+        [&graph](ShowParams& p) -> std::expected<std::string,std::string> {
             return graph.show(std::get<0>(p), std::get<1>(p));
         }
     );
@@ -250,9 +239,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
     server.tools().register_tool<SaveParams>(
         "dag_save",
         "Save the graph to a JSON file. Optionally enable auto-save mode.",
-        [&graph](SaveParams& p) -> std::string {
-            auto result = graph.save(std::get<0>(p), std::get<1>(p));
-            return result ? *result : result.error();
+        [&graph](SaveParams& p) -> std::expected<std::string,std::string> {
+            return graph.save(std::get<0>(p), std::get<1>(p));
         }
     );
 
@@ -266,9 +254,8 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_load",
         "Load a graph from a JSON file. Replaces current graph. "
         "Auto-save is NOT inherited.",
-        [&graph](LoadParams& p) -> std::string {
-            auto result = graph.load(std::get<0>(p));
-            return result ? *result : result.error();
+        [&graph](LoadParams& p) -> std::expected<std::string,std::string> {
+            return graph.load(std::get<0>(p));
         }
     );
 
@@ -278,7 +265,7 @@ void register_dependency_graph(DependencyGraph& graph, McpToolServer& server) {
         "dag_usage_guide",
         "Returns a comprehensive guide on how to use the dependency graph tools effectively. "
         "Call this at the start of a session to understand the principles of operation.",
-        [](EmptyParams&) -> std::string {
+        [](EmptyParams&) -> std::expected<std::string,std::string> {
             return DependencyGraph::usage_guide();
         }
     );
